@@ -36,50 +36,61 @@ class Bot(name: String, pass: String, var server: String, rooms:List[String]) {
       override def onError(t:Throwable): Unit = {
         println(t.getStackTrace().getClass())
       }
+
+      def login(name:String, pass:String, key:String, challenge:String, ws:WebSocket): Unit = {
+        if (pass eq "") {
+          // If the pass == '', then we need to use a GET request, since the account is unregistered.
+          val get_url = url + s"?act=getassertion&userid=$name&challengekeyid=$key&challenge=$challenge"
+          val response = Http (get_url).asString
+          ws.sendTextMessage (s"|/trn $name,0,${response.body}")
+        } else {
+          val response = Http (url).postForm (Seq ("act" -> "login", "name" -> name, "pass" -> pass, "chellengekeyid" -> key, "challenge" -> challenge) ).asString
+          val json = response.toString.split ("]") (1)
+          // TODO
+        }
+      }
+
+      def send_command(messages:Array[String]): Unit = {
+        val room = messages(0)
+        val user = messages(3)
+        // If the message starts with '$'
+        if (messages(4).charAt(0).equals('$')) {
+          val cmd = messages(4).split('$')(1).split(" ")(0)
+          var args:String = null
+          try {
+            args = messages(4).split(s"$cmd ")(1)
+          } catch {
+            case e:ArrayIndexOutOfBoundsException =>
+              args = ""
+          }
+          // We apply the command as a method then send it to the websocket as a message.
+          ws.sendTextMessage(s"$room|${new CommandList(args, room, user).commands(cmd.toLowerCase()).apply()}")
+      }
       override def onMessage(m:String): Unit = {
 
+        // Remove the newline and '>' from the message.
         val message = m.replaceAll("^>","").replace("\n", "").toLowerCase()
         println(message)
         var messages = new Array[String](0)
         try {
           messages = message.split('|')
         } catch {
-          case e:Exception => println("IT IS "+e)
+          case e:Exception => println(e)
         }
         messages(1) match {
+            // challstr: we use this to login.
           case "challstr" =>
             val key = messages(2)
             val challenge = messages(3)
-            if (pass == "") {
-              val get_url = url + s"?act=getassertion&userid=$name&challengekeyid=$key&challenge=$challenge"
-              val response = Http(get_url).asString
-              ws.sendTextMessage(s"|/trn $name,0,${response.body}")
-            } else {
-              val response = Http(url).postForm(Seq("act" -> "login", "name" -> name, "pass" -> pass, "chellengekeyid" -> key, "challenge" -> challenge )).asString
-              val json = response.toString.split("]")(1)
-            }
-            for (room <- rooms) {
-              ws.sendTextMessage(s"|/join $room")
-            }
+            this.login(name, pass, key, challenge, ws)
           case "updateuser" => {
+            // We then join every room
             for (room <- rooms) {
               ws.sendTextMessage(s"|/join $room")
             }
           }
           case "c:" => {
-            val room = messages(0)
-            val user = messages(3)
-            if (messages(4).charAt(0).equals('$')) {
-              val cmd = messages(4).split('$')(1).split(" ")(0)
-              var args:String = null
-              try {
-                args = messages(4).split(s"$cmd ")(1)
-              } catch {
-                case e:ArrayIndexOutOfBoundsException =>
-                  args = ""
-              }
-              println(s"command is '$cmd'")
-              ws.sendTextMessage(s"$room|${new CommandList(args, room, user).commands(cmd.toLowerCase()).apply()}")
+            this.send_command(messages)
             }
           }
           case _ => {}
